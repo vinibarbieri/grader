@@ -35,6 +35,28 @@ public class Job {
         this.createdAt = Instant.now();
     }
 
+    /** Reconstruction constructor — used when rehydrating from persistent storage. */
+    public Job(String jobId, JobState state, Instant createdAt, Instant startedAt, Instant endedAt,
+               int totalStudents, int processedStudents, String currentStudent,
+               int casesExecuted, int okCount, int waCount, int timeoutCount,
+               int runtimeErrorCount, int compileErrorCount, int oleCount) {
+        this.jobId = jobId;
+        this.state = state;
+        this.createdAt = createdAt;
+        this.startedAt = startedAt;
+        this.endedAt = endedAt;
+        this.totalStudents = totalStudents;
+        this.processedStudents = processedStudents;
+        this.currentStudent = currentStudent;
+        this.casesExecuted = casesExecuted;
+        this.okCount = okCount;
+        this.waCount = waCount;
+        this.timeoutCount = timeoutCount;
+        this.runtimeErrorCount = runtimeErrorCount;
+        this.compileErrorCount = compileErrorCount;
+        this.oleCount = oleCount;
+    }
+
     public static Job create() {
         String id = "job_" + Instant.now().getEpochSecond() + "_" + UUID.randomUUID().toString().substring(0, 8);
         return new Job(id);
