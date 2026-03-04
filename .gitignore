@@ -1,0 +1,60 @@
+# macOS
+.DS_Store
+
+# IDE/editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Java / Maven / Spring Boot
+**/target/
+**/out/
+*.class
+*.jar
+*.war
+*.ear
+.mvn/wrapper/maven-wrapper.jar
+
+# Node / frontend
+**/node_modules/
+**/dist/
+**/build/
+**/.vite/
+**/.cache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test and coverage artifacts
+**/coverage/
+**/.nyc_output/
+**/surefire-reports/
+**/failsafe-reports/
+
+# Temporary/runtime data
+tmp/
+temp/
+.tmp/
+.tmp_*/
+**/.tmp_*/
+*.pid
+*.pid.lock
+
+# Local grading artifacts
+relatorio_avaliacao_automatica.csv
+relatorio_avaliacao_automatica.md
+
+# Python cache (in case helper scripts are used)
+__pycache__/
+*.pyc
