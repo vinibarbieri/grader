@@ -1,0 +1,28 @@
+server:
+  port: 8080
+
+spring:
+  servlet:
+    multipart:
+      max-file-size: 500MB
+      max-request-size: 500MB
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+grader:
+  workspace-root: /tmp/grader-jobs
+  tmpfs-path: /tmp/grader-tmpfs
+  worker-pool-size: 2
+  time-limit-sec: 2
+  stdout-cap-bytes: 2097152    # 2MB
+  stderr-cap-bytes: 2097152    # 2MB
+  compile-flags: "-O1 -Wall -Werror=vla"
+  kill-grace-ms: 200
+  scoring:
+    max-score-per-problem: 20
+
+logging:
+  level:
+    com.grader: INFO
