@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Enumeration;
@@ -23,9 +24,9 @@ import java.util.Enumeration;
  *   <li>Entry name must not start with '/' or '\' (absolute path).</li>
  *   <li>Entry name must not contain '..' (path traversal).</li>
  *   <li>Unix file type (from external attributes) must be a regular file or
- *       directory; symlinks and other types (block device, etc.) are rejected.</li>
+ *       directory; symlink/hardlink and other types (block device, etc.) are rejected.</li>
  *   <li>Resolved canonical path must remain inside the target directory
- *       (defense-in-depth against edge-case escapes).</li>
+ *       and must not traverse symbolic links inside target (defense-in-depth).</li>
  * </ol>
  *
  * <p>Note: the '..' check intentionally rejects any name that contains the
@@ -87,7 +88,7 @@ public class SafeZipExtractor {
             int fileType = unixMode & UnixStat.FILE_TYPE_FLAG;
             if (fileType == UnixStat.LINK_FLAG) {
                 throw new ZipSecurityException(
-                    "Rejected symlink entry: '" + name + "'");
+                    "Rejected symlink/hardlink entry: '" + name + "'");
             }
             if (fileType != UnixStat.FILE_FLAG && fileType != UnixStat.DIR_FLAG) {
                 throw new ZipSecurityException(
@@ -102,6 +103,9 @@ public class SafeZipExtractor {
             throw new ZipSecurityException(
                 "Rejected entry that escapes the target directory: '" + name + "'");
         }
+
+        // Rule 5 — reject traversal through symlinks inside target directory
+        ensureNoSymlinkTraversal(canonicalTarget, resolved, name);
     }
 
     // -----------------------------------------------------------------------
@@ -113,17 +117,61 @@ public class SafeZipExtractor {
         Path dest = targetDir.resolve(entry.getName()).normalize();
 
         if (entry.isDirectory()) {
-            Files.createDirectories(dest);
+            createDirectoriesSafely(dest, targetDir, entry.getName());
             return;
         }
 
         // Ensure parent directories exist (ZIP may omit explicit directory entries)
-        Files.createDirectories(dest.getParent());
+        createDirectoriesSafely(dest.getParent(), targetDir, entry.getName());
+
+        // Prevent write-through if destination is an existing symbolic link.
+        if (Files.exists(dest, LinkOption.NOFOLLOW_LINKS) && Files.isSymbolicLink(dest)) {
+            throw new ZipSecurityException(
+                "Rejected entry targeting symbolic link destination: '" + entry.getName() + "'");
+        }
 
         try (InputStream in = zf.getInputStream(entry)) {
             Files.copy(in, dest, StandardCopyOption.REPLACE_EXISTING);
         }
         log.debug("Extracted '{}'", dest.getFileName());
+    }
+
+    private void ensureNoSymlinkTraversal(Path canonicalTarget, Path resolved, String entryName)
+            throws ZipSecurityException {
+        Path relative = canonicalTarget.relativize(resolved);
+        Path cursor = canonicalTarget;
+        for (Path part : relative) {
+            cursor = cursor.resolve(part);
+            if (Files.exists(cursor, LinkOption.NOFOLLOW_LINKS) && Files.isSymbolicLink(cursor)) {
+                throw new ZipSecurityException(
+                    "Rejected entry traversing symbolic link within target directory: '" + entryName + "'");
+            }
+        }
+    }
+
+    private void createDirectoriesSafely(Path dir, Path canonicalTarget, String entryName)
+            throws IOException {
+        if (dir == null) {
+            return;
+        }
+        if (!dir.startsWith(canonicalTarget)) {
+            throw new ZipSecurityException(
+                "Rejected entry that escapes the target directory: '" + entryName + "'");
+        }
+
+        Path relative = canonicalTarget.relativize(dir.normalize());
+        Path cursor = canonicalTarget;
+        for (Path part : relative) {
+            cursor = cursor.resolve(part);
+            if (Files.exists(cursor, LinkOption.NOFOLLOW_LINKS)) {
+                if (Files.isSymbolicLink(cursor)) {
+                    throw new ZipSecurityException(
+                        "Rejected entry traversing symbolic link within target directory: '" + entryName + "'");
+                }
+            } else {
+                Files.createDirectory(cursor);
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

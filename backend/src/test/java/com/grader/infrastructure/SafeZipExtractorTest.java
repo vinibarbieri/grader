@@ -10,6 +10,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFileAttributeView;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -132,6 +133,25 @@ class SafeZipExtractorTest {
     }
 
     @Test
+    void hardlinkEntry_throwsZipSecurityException() throws Exception {
+        Path jobDir = tempDir.resolve("job-hardlink");
+        Files.createDirectories(jobDir);
+
+        // ZIP format does not have a dedicated hardlink type like TAR. Many tools encode
+        // link-like entries with Unix LINK_FLAG, so we reject them under symlink/hardlink policy.
+        byte[] zip = buildZip(hardlink("problem1.c", "submissions/alice/problem1.c"));
+        Path zipFile = writeZip("hardlink.zip", zip);
+
+        SafeZipExtractor.ZipSecurityException ex = assertThrows(
+            SafeZipExtractor.ZipSecurityException.class,
+            () -> new SafeZipExtractor().extract(zipFile, jobDir)
+        );
+        assertTrue(ex.getMessage().toLowerCase().contains("hardlink")
+                || ex.getMessage().toLowerCase().contains("symlink"),
+            "Expected link-related message, got: " + ex.getMessage());
+    }
+
+    @Test
     void nonStandardUnixFileType_throwsZipSecurityException() throws Exception {
         // Entries with non-regular-file, non-directory Unix types are rejected.
         // S_IFBLK = 0x6000 (block device) as an example — not S_IFREG or S_IFDIR.
@@ -145,6 +165,33 @@ class SafeZipExtractorTest {
             SafeZipExtractor.ZipSecurityException.class,
             () -> new SafeZipExtractor().extract(zipFile, jobDir)
         );
+    }
+
+    @Test
+    void canonicalPathHardening_rejectsWriteThroughSymlinkInsideTarget() throws Exception {
+        // This test requires symlink support on the host filesystem.
+        if (!supportsSymlink(tempDir)) {
+            return;
+        }
+
+        Path jobDir = tempDir.resolve("job-symlink-traversal");
+        Path outsideDir = tempDir.resolve("outside");
+        Files.createDirectories(jobDir);
+        Files.createDirectories(outsideDir);
+
+        Path linkInTarget = jobDir.resolve("escape");
+        Files.createSymbolicLink(linkInTarget, outsideDir);
+
+        byte[] zip = buildZip(regularFile("escape/owned.txt", "owned"));
+        Path zipFile = writeZip("symlink-traversal.zip", zip);
+
+        SafeZipExtractor.ZipSecurityException ex = assertThrows(
+            SafeZipExtractor.ZipSecurityException.class,
+            () -> new SafeZipExtractor().extract(zipFile, jobDir)
+        );
+        assertTrue(ex.getMessage().toLowerCase().contains("symbolic link"),
+            "Expected symbolic-link rejection, got: " + ex.getMessage());
+        assertFalse(Files.exists(outsideDir.resolve("owned.txt")));
     }
 
     // -----------------------------------------------------------------------
@@ -165,6 +212,11 @@ class SafeZipExtractorTest {
 
     /** Symbolic link entry. */
     private ZipSpec symlink(String name, String target) {
+        return new ZipSpec(name, target, UnixStat.LINK_FLAG | 0777);
+    }
+
+    /** Hardlink-like ZIP entry encoded with Unix LINK_FLAG. */
+    private ZipSpec hardlink(String name, String target) {
         return new ZipSpec(name, target, UnixStat.LINK_FLAG | 0777);
     }
 
@@ -200,5 +252,23 @@ class SafeZipExtractorTest {
         Path p = tempDir.resolve(filename);
         Files.write(p, bytes);
         return p;
+    }
+
+    private boolean supportsSymlink(Path base) {
+        try {
+            if (Files.getFileAttributeView(base, PosixFileAttributeView.class) == null) {
+                return false;
+            }
+            Path target = base.resolve("symlink-support-target");
+            Path link = base.resolve("symlink-support-link");
+            Files.writeString(target, "ok");
+            Files.createSymbolicLink(link, target);
+            boolean ok = Files.isSymbolicLink(link);
+            Files.deleteIfExists(link);
+            Files.deleteIfExists(target);
+            return ok;
+        } catch (UnsupportedOperationException | IOException | SecurityException ex) {
+            return false;
+        }
     }
 }
