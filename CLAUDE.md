@@ -2,7 +2,7 @@
 
 ## Mission
 
-Build the backend defined in `backend-prd.md` using Java 21, Spring Boot, Maven, OOP design, and TDD with JUnit 5.
+Build the backend defined in `backend-prd.md` using Java 25, Spring Boot, Maven, OOP design, and TDD with JUnit 5.
 This file is a strict execution guide for implementation decisions.
 
 ## Source of truth
@@ -16,7 +16,7 @@ If there is any conflict between this guide and implementation assumptions, foll
 
 ## Mandatory technical stack
 
-- Java 21
+- Java 25
 - Spring Boot (REST API)
 - Maven
 - JUnit 5
@@ -201,12 +201,39 @@ All major logs must include `jobId`.
 - Do not skip tests for execution and safety paths.
 - Always start writting the text before implementation it is a TDD project
 
+## Git workflow rules
+
+- Do NOT create commits automatically after completing a step.
+- Only create a commit when the user explicitly requests a commit.
+- Never push to remote (`git push` is forbidden in this workflow).
+- If the user asks for a commit, use one-line short commit messages only.
+- If the user asks for a commit, follow conventional commit prefixes:
+  - `feat:`
+  - `fix:`
+  - `refact:`
+  - `test:`
+  - `docs:`
+  - `chore:`
+- Keep commit subject concise and descriptive (recommended: under 72 characters).
+- Examples:
+  - `feat: add job state machine transitions`
+  - `fix: prevent zip path traversal on extraction`
+  - `refact: extract pgid kill strategy into launcher`
+
 ## Step-by-step documentation workflow
 
 After completing each implementation step:
 1. Verify tests pass: `cd backend && mvn test`
 2. Create `grader/docs/step{N}.md` documenting what was done, decisions made, and test outcomes
 3. Update `grader/claudePlan.md` if the plan changed
+4. Do NOT commit unless the user explicitly asks for a commit
+
+## Step execution rule (strict)
+
+- Execute exactly one step at a time.
+- When the user asks to implement a specific step, implement only that step.
+- Do not anticipate or start the next step without explicit user request.
+- At the end of a step, stop after tests/docs updates and wait for the next instruction.
 
 Steps map:
 - Step 0: Setup workflow files

@@ -22,7 +22,7 @@ Provide a reliable local grading backend that:
 
 ### Goals (MVP)
 
-- Implement backend in **Java 21 + Spring Boot + Maven**.
+- Implement backend in **Java 25 + Spring Boot + Maven**.
 - Follow **OOP boundaries** and **TDD with JUnit 5**.
 - Support job-based grading workflow with filesystem persistence (no DB in MVP).
 - Handle execution lifecycle: upload, evaluate, status, results, download.
@@ -478,7 +478,7 @@ Logs must include `jobId`, student/file identifiers, and phase markers.
 
 ### 20.1 What is already implementation-ready
 
-- Core architecture and stack are clear: Java 21, Spring Boot, Maven, JUnit 5.
+- Core architecture and stack are clear: Java 25, Spring Boot, Maven, JUnit 5.
 - Runtime constraints are explicit for Raspberry Pi: worker pool `2`, `tmpfs` `64MB`, no cache in Phase A.
 - Security baseline is explicit: safe ZIP extraction, PGID-aware kill policy, output caps, cancellation endpoint.
 - API contract for core flows is defined (`create job`, `evaluate`, `status`, `results`, `download`, `cancel`).
