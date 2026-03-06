@@ -37,11 +37,21 @@ public class JobServiceImpl implements JobService {
     @Override
     public Job evaluateJob(String jobId) {
         Job job = getJob(jobId);
-        // Stub: transition to RUNNING — full execution engine wired in Step 9
-        job.transitionTo(JobState.RUNNING);
-        jobRepository.save(job);
-        log.info("jobId={} evaluate requested (stub)", jobId);
-        return job;
+        if (job.getState() == JobState.QUEUED) {
+            // Stub: transition to RUNNING — full execution engine wired in Step 9
+            job.transitionTo(JobState.RUNNING);
+            jobRepository.save(job);
+            log.info("jobId={} evaluate requested (stub), state=running", jobId);
+            return job;
+        }
+
+        if (job.getState() == JobState.RUNNING) {
+            // Idempotent reevaluation request while already running.
+            log.info("jobId={} evaluate requested again, state=running (idempotent)", jobId);
+            return job;
+        }
+
+        throw new JobInvalidStateException(jobId, job.getState().name(), "RUNNING");
     }
 
     @Override
