@@ -1,0 +1,17 @@
+services:
+  grader-linux:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: grader-linux-test:latest
+    container_name: grader-linux-test
+    working_dir: /workspace/backend
+    volumes:
+      - ./:/workspace
+      - maven-cache:/var/maven/.m2
+    stdin_open: true
+    tty: true
+    command: sleep infinity
+
+volumes:
+  maven-cache:
