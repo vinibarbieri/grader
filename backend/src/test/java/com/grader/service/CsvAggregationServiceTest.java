@@ -30,6 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CsvAggregationServiceTest {
 
     private static final String HEADER = "student_dir,c_file,problem,case,status,details,expected_output,program_output";
+    private static final String HEADER_WITH_DURATION = HEADER + ",duration_ms";
     private static final double MAX_SCORE = 20.0;
 
     private CsvAggregationService service;
@@ -116,6 +117,24 @@ class CsvAggregationServiceTest {
 
         StudentResult charlie = service.aggregate(csv).get(0);
         assertThat(charlie.failedAnyQuestion()).isFalse();
+    }
+
+    @Test
+    void outputLimitExceeded_failedAnyQuestionIsTrue() {
+        String csv = HEADER + "\n" +
+                "\"Charlie__submission_11111\",\"problem1.c\",\"problem1\",\"case01\",\"OUTPUT_LIMIT_EXCEEDED\",\"Output limit exceeded\",\"1\\n\",\"...\"\n";
+
+        StudentResult charlie = service.aggregate(csv).get(0);
+        assertThat(charlie.failedAnyQuestion()).isTrue();
+    }
+
+    @Test
+    void internalError_failedAnyQuestionIsTrue() {
+        String csv = HEADER + "\n" +
+                "\"Charlie__submission_11111\",\"problem1.c\",\"problem1\",\"case01\",\"INTERNAL_ERROR\",\"Unexpected error\",\"1\\n\",\"\"\n";
+
+        StudentResult charlie = service.aggregate(csv).get(0);
+        assertThat(charlie.failedAnyQuestion()).isTrue();
     }
 
     @Test
@@ -293,6 +312,16 @@ class CsvAggregationServiceTest {
         assertThat(result.studentId()).isEqualTo("plain_dir_name");
     }
 
+    @Test
+    void studentIdParsed_whenNonNumericSuffix_fallsBackToFullDir() {
+        String csv = HEADER + "\n" +
+                "\"John__submission_abc\",\"problem1.c\",\"problem1\",\"case01\",\"OK\",\"-\",\"1\\n\",\"1\\n\"\n";
+
+        StudentResult result = service.aggregate(csv).get(0);
+        assertThat(result.studentName()).isEqualTo("John");
+        assertThat(result.studentId()).isEqualTo("John__submission_abc");
+    }
+
     // -------------------------------------------------------------------------
     // CSV quoting edge cases
     // -------------------------------------------------------------------------
@@ -331,6 +360,16 @@ class CsvAggregationServiceTest {
         // problem2: 1/2 * 20 = 10
         assertThat(mia.problem2Score()).isEqualTo(10.0);
         assertThat(mia.totalScore()).isEqualTo(30.0);
+    }
+
+    @Test
+    void caseDurationParsed_whenDurationColumnExists() {
+        String csv = HEADER_WITH_DURATION + "\n" +
+                "\"Nina__submission_90909\",\"problem1.c\",\"problem1\",\"case01\",\"OK\",\"-\",\"1\\n\",\"1\\n\",\"37\"\n";
+
+        StudentResult nina = service.aggregate(csv).get(0);
+        CaseResult c = nina.files().get(0).cases().get(0);
+        assertThat(c.durationMs()).isEqualTo(37L);
     }
 
     // -------------------------------------------------------------------------

@@ -8,7 +8,7 @@ Implemented `CsvAggregationService` and its full test suite for the CSV-to-`Stud
 
 | File | Role |
 |---|---|
-| `src/test/java/com/grader/service/CsvAggregationServiceTest.java` | 19 tests — written first (TDD) |
+| `src/test/java/com/grader/service/CsvAggregationServiceTest.java` | 23 tests — written first (TDD) |
 | `src/main/java/com/grader/service/CsvAggregationService.java` | Implementation |
 
 The domain records (`StudentResult`, `FileResult`, `CaseResult`) were already in place from Step 2.
@@ -21,6 +21,12 @@ The parser handles the exact format produced by `avaliacao_automatica.sh`:
 
 ```
 student_dir,c_file,problem,case,status,details,expected_output,program_output
+```
+
+It is also backward-compatible with an optional 9th column used by the Java engine:
+
+```
+student_dir,c_file,problem,case,status,details,expected_output,program_output,duration_ms
 ```
 
 - All fields RFC 4180 double-quoted (`""` to escape internal double-quotes).
@@ -39,7 +45,7 @@ student_dir,c_file,problem,case,status,details,expected_output,program_output
 
 - `studentName` = part before `__`
 - `studentId` = numeric suffix after last `_` in the submission part (e.g. `12345`)
-- Falls back to full directory name if the pattern is not matched.
+- Falls back to full directory name if a numeric suffix cannot be extracted.
 
 Source: `renomear_submissoes.sh` uses `${base_name}__${submission_id}` where `submission_id` comes from the Gradescope metadata YAML keys like `submission_12345`.
 
@@ -76,6 +82,7 @@ Cases excluded from totals: `SKIP`, `INTERNAL_ERROR`, `COMPILE_ERROR` (in case p
 ```java
 failedAnyQuestion = compileErrorsCount > 0 || runtimeErrorsCount > 0
                   || timeoutsCount > 0 || waCount > 0
+                  || outputLimitExceededCount > 0 || internalErrorsCount > 0
 ```
 
 ### JSON persistence
@@ -93,6 +100,8 @@ failedAnyQuestion = compileErrorsCount > 0 || runtimeErrorsCount > 0
 | `singleStudentSingleOkCase_parsedCorrectly` | Full field mapping, name/ID parsing |
 | `mixedStatuses_countersAggregatedCorrectly` | OK, WA, TIMEOUT, RUNTIME_ERROR, OLE |
 | `allOk_failedAnyQuestionIsFalse` | `failedAnyQuestion` flag |
+| `outputLimitExceeded_failedAnyQuestionIsTrue` | OLE marks `failedAnyQuestion` |
+| `internalError_failedAnyQuestionIsTrue` | INTERNAL_ERROR marks `failedAnyQuestion` |
 | `skipStatus_notCountedInOkOrError` | SKIP case row |
 | `compileError_fileHasNoTestCases` | Compile error row → empty cases |
 | `compileError_doesNotCountTowardProblemTotal` | Score = 0 for errored problem |
@@ -104,8 +113,10 @@ failedAnyQuestion = compileErrorsCount > 0 || runtimeErrorsCount > 0
 | `dashOutputField_convertedToEmptyString` | `-` → `""` |
 | `studentNameParsed_fromDoubleUnderscorePattern` | `John_Doe__submission_54321` → name/id |
 | `studentNameParsed_whenNoDoubleUnderscore_usesFullDirAsName` | Fallback |
+| `studentIdParsed_whenNonNumericSuffix_fallsBackToFullDir` | Invalid suffix fallback |
 | `quotedFieldWithEscapedDoubleQuote_parsedCorrectly` | RFC 4180 `""` escaping |
 | `multipleFilesPerStudent_allAggregated` | Two files, two problems, per-problem scoring |
+| `caseDurationParsed_whenDurationColumnExists` | Optional `duration_ms` column parsed |
 | `saveResultsJson_writesReadableJsonFile` | JSON written and contains expected keys |
 
 ---

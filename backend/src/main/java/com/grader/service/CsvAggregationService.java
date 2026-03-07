@@ -48,6 +48,7 @@ public class CsvAggregationService {
     private static final int COL_DETAILS = 5;
     private static final int COL_EXPECTED = 6;
     private static final int COL_PROGRAM = 7;
+    private static final int COL_DURATION_MS = 8;
 
     private final double maxScorePerProblem;
     private final ObjectMapper mapper;
@@ -207,6 +208,8 @@ public class CsvAggregationService {
         int timeoutsCount = 0;
         int waCount = 0;
         int okCount = 0;
+        boolean hasOutputLimitExceeded = false;
+        boolean hasInternalError = false;
 
         // Per-problem stats for scoring — only executeable cases count toward totals
         int p1Total = 0, p1Ok = 0;
@@ -241,11 +244,13 @@ public class CsvAggregationService {
                     }
                     case OUTPUT_LIMIT_EXCEEDED -> {
                         // Counted toward problem total but tracked separately
+                        hasOutputLimitExceeded = true;
                         if ("problem1".equals(problem)) p1Total++;
                         else if ("problem2".equals(problem)) p2Total++;
                     }
+                    case INTERNAL_ERROR -> hasInternalError = true;
                     default -> {
-                        // SKIP, INTERNAL_ERROR, COMPILE_ERROR in case position —
+                        // SKIP, COMPILE_ERROR in case position —
                         // not counted toward executable totals
                     }
                 }
@@ -256,7 +261,8 @@ public class CsvAggregationService {
         double problem2Score = p2Total > 0 ? ((double) p2Ok / p2Total) * maxScorePerProblem : 0.0;
         double totalScore = problem1Score + problem2Score;
         boolean failedAnyQuestion = compileErrorsCount > 0 || runtimeErrorsCount > 0
-                || timeoutsCount > 0 || waCount > 0;
+                || timeoutsCount > 0 || waCount > 0
+                || hasOutputLimitExceeded || hasInternalError;
 
         return new StudentResult(
                 studentId,
@@ -305,6 +311,7 @@ public class CsvAggregationService {
             String details = safeGet(row, COL_DETAILS);
             String expectedOutput = unescapeOutput(safeGet(row, COL_EXPECTED));
             String programOutput = unescapeOutput(safeGet(row, COL_PROGRAM));
+            long durationMs = parseDurationMs(row);
 
             CaseStatus status;
             try {
@@ -314,7 +321,7 @@ public class CsvAggregationService {
                 status = CaseStatus.INTERNAL_ERROR;
             }
 
-            cases.add(new CaseResult(caseName, status, details, expectedOutput, programOutput, 0L));
+            cases.add(new CaseResult(caseName, status, details, expectedOutput, programOutput, durationMs));
         }
 
         return new FileResult(fileName, problem, CompileStatus.OK, "-", cases);
@@ -336,6 +343,18 @@ public class CsvAggregationService {
 
     private String safeGet(String[] row, int index) {
         return (index < row.length) ? row[index] : "";
+    }
+
+    private long parseDurationMs(String[] row) {
+        String raw = safeGet(row, COL_DURATION_MS).trim();
+        if (raw.isEmpty()) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(raw);
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -362,8 +381,7 @@ public class CsvAggregationService {
      *
      * <p>Expected pattern: {@code {name}__submission_{id}} e.g.
      * {@code Alice__submission_12345} → {@code "12345"}.
-     * If the numeric ID cannot be extracted, returns the part after {@code __}
-     * or the full directory name.
+     * If the numeric ID cannot be extracted, returns the full directory name.
      */
     private String parseStudentId(String submissionDir) {
         int idx = submissionDir.indexOf("__");
@@ -376,7 +394,7 @@ public class CsvAggregationService {
                     return candidate;
                 }
             }
-            return rest;
+            return submissionDir;
         }
         return submissionDir;
     }
