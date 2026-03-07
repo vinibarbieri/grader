@@ -5,6 +5,7 @@ import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -124,7 +125,16 @@ class ProcessGroupLauncherTest {
         launcher.kill(result);
         result.process().waitFor(3, TimeUnit.SECONDS);
 
-        long aliveCount = descendants.stream().filter(ProcessHandle::isAlive).count();
+        long deadline = System.currentTimeMillis() + 2_000;
+        long aliveCount;
+        do {
+            aliveCount = descendants.stream().filter(this::isAliveNonZombie).count();
+            if (aliveCount == 0) {
+                break;
+            }
+            Thread.sleep(50);
+        } while (System.currentTimeMillis() < deadline);
+
         assertEquals(0, aliveCount, "All child processes must be terminated after kill");
     }
 
@@ -146,5 +156,33 @@ class ProcessGroupLauncherTest {
         assertFalse(result.process().isAlive());
 
         assertDoesNotThrow(() -> launcher.kill(result));
+    }
+
+    private boolean isAliveNonZombie(ProcessHandle handle) {
+        if (!handle.isAlive()) {
+            return false;
+        }
+        // In containers without an init/reaper, killed children can remain as zombies.
+        // Zombies are terminated from a workload/safety perspective, so we don't count
+        // them as survivors in this test.
+        return !isZombie(handle.pid());
+    }
+
+    private boolean isZombie(long pid) {
+        Path stat = Path.of("/proc", String.valueOf(pid), "stat");
+        try {
+            if (!Files.exists(stat)) {
+                return false;
+            }
+            String raw = Files.readString(stat);
+            int closeParen = raw.lastIndexOf(')');
+            if (closeParen < 0 || closeParen + 2 >= raw.length()) {
+                return false;
+            }
+            char state = raw.charAt(closeParen + 2);
+            return state == 'Z';
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 }
