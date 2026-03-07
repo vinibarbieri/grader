@@ -36,6 +36,7 @@ import java.util.stream.Stream;
  *   <li>Async evaluation: discover students, compile, run cases, write CSV.</li>
  *   <li>CSV aggregation into {@code results.json} via {@link CsvAggregationService}.</li>
  *   <li>Cooperative cancellation via per-job {@link AtomicBoolean} cancel flags.</li>
+ *   <li>Metrics logging at job completion via {@link MetricsService}.</li>
  * </ol>
  *
  * <h2>Workspace layout after ZIP extraction</h2>
@@ -89,6 +90,8 @@ public class JobServiceImpl implements JobService {
     private final SafeZipExtractor zipExtractor;
     private final ExecutionEngine executionEngine;
     private final CsvAggregationService csvAggregationService;
+    private final ArtifactService artifactService;
+    private final MetricsService metricsService;
     private final Path workspaceRoot;
     private final Executor workerPool;
 
@@ -106,12 +109,16 @@ public class JobServiceImpl implements JobService {
                           SafeZipExtractor zipExtractor,
                           ExecutionEngine executionEngine,
                           CsvAggregationService csvAggregationService,
+                          ArtifactService artifactService,
+                          MetricsService metricsService,
                           Path workspaceRoot,
                           Executor workerPool) {
         this.jobRepository = jobRepository;
         this.zipExtractor = zipExtractor;
         this.executionEngine = executionEngine;
         this.csvAggregationService = csvAggregationService;
+        this.artifactService = artifactService;
+        this.metricsService = metricsService;
         this.workspaceRoot = workspaceRoot;
         this.workerPool = workerPool;
     }
@@ -220,18 +227,7 @@ public class JobServiceImpl implements JobService {
     @Override
     public byte[] downloadArtifact(String jobId, String format) {
         getJob(jobId); // validate existence
-        String fileName = "csv".equals(format) ? "results.csv" : "results.json";
-        Path artifact = jobRepository.getJobDirectory(jobId).resolve(fileName);
-
-        if (!Files.exists(artifact)) {
-            throw new ArtifactNotFoundException("Artifact not found for job " + jobId + ": " + fileName);
-        }
-
-        try {
-            return Files.readAllBytes(artifact);
-        } catch (IOException e) {
-            throw new UncheckedIOException("Failed to read artifact for job " + jobId, e);
-        }
+        return artifactService.getArtifactBytes(jobId, format);
     }
 
     // -------------------------------------------------------------------------
@@ -264,6 +260,11 @@ public class JobServiceImpl implements JobService {
     // -------------------------------------------------------------------------
 
     private void runEvaluation(String jobId, AtomicBoolean cancelFlag) {
+        long compileTotalMs = 0;
+        long runTotalMs = 0;
+        long killedProcessesStart = executionEngine.getKilledProcessesCount();
+        long cleanupFailuresStart = executionEngine.getCleanupFailuresCount();
+
         try {
             Path jobDir = jobRepository.getJobDirectory(jobId);
             Path submissionsDir = jobDir.resolve("submissions");
@@ -292,7 +293,9 @@ public class JobServiceImpl implements JobService {
                     updateJob(jobId, j -> j.setCurrentStudent(studentDirName));
                     log.info("jobId={} processing student={}", jobId, studentDirName);
 
-                    processStudent(jobId, studentDir, testsDir, csvWriter, cancelFlag);
+                    ProcessingStats stats = processStudent(jobId, studentDir, testsDir, csvWriter, cancelFlag);
+                    compileTotalMs += stats.compileTotalMs();
+                    runTotalMs += stats.runTotalMs();
 
                     updateJob(jobId, Job::incrementProcessedStudents);
                 }
@@ -319,6 +322,13 @@ public class JobServiceImpl implements JobService {
                 tryTransitionToError(jobId);
             }
         } finally {
+            long killedProcessesDelta = Math.max(
+                    0L, executionEngine.getKilledProcessesCount() - killedProcessesStart);
+            long cleanupFailuresDelta = Math.max(
+                    0L, executionEngine.getCleanupFailuresCount() - cleanupFailuresStart);
+
+            metricsService.incrementCleanupFailures(cleanupFailuresDelta);
+            recordFinalMetrics(jobId, compileTotalMs, runTotalMs, killedProcessesDelta, cleanupFailuresDelta);
             cancelFlags.remove(jobId);
             activeJobId.compareAndSet(jobId, null);
         }
@@ -328,15 +338,19 @@ public class JobServiceImpl implements JobService {
      * Processes a single student directory: for each {@code .c} file, detect the problem,
      * compile, then run all matching test cases. Writes one CSV row per case (or one row
      * per compile/skip error when no cases are run).
+     *
+     * @return accumulated compile and run timing for this student
      */
-    private void processStudent(String jobId, Path studentDir, Path testsDir,
-                                BufferedWriter csvWriter, AtomicBoolean cancelFlag) throws IOException {
+    private ProcessingStats processStudent(String jobId, Path studentDir, Path testsDir,
+                                           BufferedWriter csvWriter, AtomicBoolean cancelFlag) throws IOException {
 
         String studentDirName = studentDir.getFileName().toString();
         List<Path> cFiles = listSortedCFiles(studentDir);
+        long compileTotalMs = 0;
+        long runTotalMs = 0;
 
         for (Path cFile : cFiles) {
-            if (cancelFlag.get()) return;
+            if (cancelFlag.get()) return new ProcessingStats(compileTotalMs, runTotalMs);
 
             String cFileName = cFile.getFileName().toString();
             String problem = detectProblem(cFileName);
@@ -356,9 +370,11 @@ public class JobServiceImpl implements JobService {
             Path binary = studentDir.resolve(baseName);
 
             CompileOutcome compileOutcome;
+            long compileStart = System.currentTimeMillis();
             try {
                 compileOutcome = executionEngine.compile(cFile, binary);
             } catch (Exception e) {
+                compileTotalMs += System.currentTimeMillis() - compileStart;
                 log.error("jobId={} student={} file={} compile threw: {}",
                         jobId, studentDirName, cFileName, e.getMessage());
                 writeCsvRow(csvWriter, studentDirName, cFileName, problem,
@@ -366,6 +382,7 @@ public class JobServiceImpl implements JobService {
                 updateJob(jobId, j -> j.recordCaseResult(CaseStatus.COMPILE_ERROR));
                 continue;
             }
+            compileTotalMs += System.currentTimeMillis() - compileStart;
 
             if (compileOutcome.status() == CompileStatus.COMPILE_ERROR) {
                 log.info("jobId={} student={} file={} COMPILE_ERROR", jobId, studentDirName, cFileName);
@@ -380,7 +397,7 @@ public class JobServiceImpl implements JobService {
             List<Path> inputFiles = listSortedInputFiles(problemTestDir);
 
             for (Path inputFile : inputFiles) {
-                if (cancelFlag.get()) return;
+                if (cancelFlag.get()) return new ProcessingStats(compileTotalMs, runTotalMs);
 
                 String caseName = stripSuffix(inputFile.getFileName().toString(), ".in");
                 Path expectedFile = problemTestDir.resolve(caseName + ".out");
@@ -395,6 +412,7 @@ public class JobServiceImpl implements JobService {
 
                 CaseResult result = executionEngine.runCase(
                         caseName, binary, inputFile, expectedOutput, studentDir);
+                runTotalMs += result.durationMs();
 
                 writeCsvRow(csvWriter, studentDirName, cFileName, problem,
                         caseName, result.status().name(), result.details(),
@@ -406,7 +424,12 @@ public class JobServiceImpl implements JobService {
                         jobId, studentDirName, cFileName, caseName, result.status(), result.durationMs());
             }
         }
+
+        return new ProcessingStats(compileTotalMs, runTotalMs);
     }
+
+    /** Accumulates compile and run timing across all students. */
+    private record ProcessingStats(long compileTotalMs, long runTotalMs) {}
 
     // -------------------------------------------------------------------------
     // Cancel / error helpers
@@ -419,6 +442,7 @@ public class JobServiceImpl implements JobService {
         try {
             Job job = jobRepository.findById(jobId).orElse(null);
             if (job == null) return;
+            boolean transitionedToCancelled = false;
 
             if (job.getState() == JobState.RUNNING) {
                 job.transitionTo(JobState.CANCELLING);
@@ -429,6 +453,10 @@ public class JobServiceImpl implements JobService {
             if (job != null && job.getState() == JobState.CANCELLING) {
                 job.transitionTo(JobState.CANCELLED);
                 jobRepository.save(job);
+                transitionedToCancelled = true;
+            }
+            if (transitionedToCancelled) {
+                metricsService.incrementCancelledJobs();
             }
             log.info("jobId={} evaluation cancelled, state=cancelled", jobId);
         } catch (Exception e) {
@@ -442,6 +470,7 @@ public class JobServiceImpl implements JobService {
             if (job != null && !job.getState().isTerminal()) {
                 if (job.getState() == JobState.CANCELLING) {
                     job.transitionTo(JobState.CANCELLED);
+                    metricsService.incrementCancelledJobs();
                 } else {
                     job.transitionTo(JobState.ERROR);
                 }
@@ -450,6 +479,26 @@ public class JobServiceImpl implements JobService {
             }
         } catch (Exception ex) {
             log.error("jobId={} failed to transition to ERROR: {}", jobId, ex.getMessage());
+        }
+    }
+
+    /**
+     * Records all required metrics after job completion and logs them via SLF4J.
+     * Called in the {@code finally} block of {@link #runEvaluation} to guarantee execution.
+     */
+    private void recordFinalMetrics(String jobId, long compileTotalMs, long runTotalMs,
+                                    long killedProcesses, long cleanupFailures) {
+        try {
+            Job job = jobRepository.findById(jobId).orElse(null);
+            if (job == null) return;
+
+            long tmpfsPeakBytes = artifactService.computeWorkspaceSizeBytes(jobId);
+
+            metricsService.recordJobCompletion(
+                    jobId, job, compileTotalMs, runTotalMs,
+                    killedProcesses, cleanupFailures, tmpfsPeakBytes);
+        } catch (Exception e) {
+            log.warn("jobId={} failed to record metrics: {}", jobId, e.getMessage());
         }
     }
 
@@ -559,15 +608,5 @@ public class JobServiceImpl implements JobService {
 
     private static String stripSuffix(String s, String suffix) {
         return s.endsWith(suffix) ? s.substring(0, s.length() - suffix.length()) : s;
-    }
-
-    /**
-     * Thrown when a requested download artifact does not exist yet (job not done).
-     * Extends {@link RuntimeException} so it propagates through the controller layer.
-     */
-    public static class ArtifactNotFoundException extends RuntimeException {
-        public ArtifactNotFoundException(String message) {
-            super(message);
-        }
     }
 }

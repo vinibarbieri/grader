@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 /**
@@ -31,6 +32,7 @@ public class ProcessGroupLauncher {
     private static final Logger log = LoggerFactory.getLogger(ProcessGroupLauncher.class);
 
     private final long killGraceMs;
+    private final AtomicLong killedProcessesCount = new AtomicLong();
 
     public ProcessGroupLauncher(long killGraceMs) {
         this.killGraceMs = killGraceMs;
@@ -63,12 +65,21 @@ public class ProcessGroupLauncher {
     }
 
     /**
+     * Returns the total number of kill sequences issued since this instance was created.
+     * Each call to {@link #kill} counts as one kill regardless of how many signals are sent.
+     */
+    public long getKilledProcessesCount() {
+        return killedProcessesCount.get();
+    }
+
+    /**
      * Executes the full kill sequence against the process group identified by
      * {@code result.pgid()}.
      *
      * <p>Safe to call on an already-terminated process (idempotent).
      */
     public void kill(LaunchResult result) {
+        killedProcessesCount.incrementAndGet();
         long pgid = result.pgid();
         ProcessHandle handle = result.process().toHandle();
 

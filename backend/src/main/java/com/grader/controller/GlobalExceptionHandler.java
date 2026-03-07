@@ -1,10 +1,10 @@
 package com.grader.controller;
 
 import com.grader.controller.dto.ErrorResponse;
+import com.grader.service.ArtifactNotFoundException;
 import com.grader.service.JobBusyException;
 import com.grader.service.JobInvalidStateException;
 import com.grader.service.JobNotFoundException;
-import com.grader.service.JobServiceImpl.ArtifactNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;

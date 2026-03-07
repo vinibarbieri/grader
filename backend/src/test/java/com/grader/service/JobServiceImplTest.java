@@ -67,6 +67,7 @@ class JobServiceImplTest {
         tempWorkspace = Files.createTempDirectory("grader-step9-test-");
         service = new JobServiceImpl(
                 mockRepo, mockZipExtractor, mockEngine, mockCsvService,
+                new ArtifactService(mockRepo), new MetricsService(),
                 tempWorkspace, DIRECT_EXECUTOR);
     }
 
@@ -125,6 +126,7 @@ class JobServiceImplTest {
         Executor noOp = task -> { /* don't run */ };
         JobServiceImpl svc = new JobServiceImpl(
                 mockRepo, mockZipExtractor, mockEngine, mockCsvService,
+                new ArtifactService(mockRepo), new MetricsService(),
                 tempWorkspace, noOp);
 
         Job result = svc.evaluateJob(job.getJobId());
@@ -180,6 +182,7 @@ class JobServiceImplTest {
         Executor noOp = task -> { /* don't run */ };
         JobServiceImpl svc = new JobServiceImpl(
                 mockRepo, mockZipExtractor, mockEngine, mockCsvService,
+                new ArtifactService(mockRepo), new MetricsService(),
                 tempWorkspace, noOp);
 
         svc.evaluateJob(firstJob.getJobId());
@@ -395,6 +398,7 @@ class JobServiceImplTest {
         // Build service with real repo + direct executor (synchronous)
         JobServiceImpl svc = new JobServiceImpl(
                 realRepo, mockZipExtractor, mockEngine, mockCsvService,
+                new ArtifactService(realRepo), new MetricsService(),
                 tempWorkspace, DIRECT_EXECUTOR);
 
         // Trigger evaluation (runs synchronously via DIRECT_EXECUTOR)
@@ -428,6 +432,7 @@ class JobServiceImplTest {
 
         JobServiceImpl svc = new JobServiceImpl(
                 realRepo, mockZipExtractor, mockEngine, mockCsvService,
+                new ArtifactService(realRepo), new MetricsService(),
                 tempWorkspace, DIRECT_EXECUTOR);
 
         svc.evaluateJob("no-subs-job");
@@ -471,6 +476,7 @@ class JobServiceImplTest {
 
         JobServiceImpl svc = new JobServiceImpl(
                 realRepo, mockZipExtractor, mockEngine, mockCsvService,
+                new ArtifactService(realRepo), new MetricsService(),
                 tempWorkspace, DIRECT_EXECUTOR);
 
         svc.evaluateJob("skip-job");
@@ -506,6 +512,7 @@ class JobServiceImplTest {
 
         JobServiceImpl svc = new JobServiceImpl(
                 realRepo, mockZipExtractor, mockEngine, mockCsvService,
+                new ArtifactService(realRepo), new MetricsService(),
                 tempWorkspace, DIRECT_EXECUTOR);
 
         svc.evaluateJob("ce-job");
@@ -533,6 +540,27 @@ class JobServiceImplTest {
 
         assertThat(job.getState()).isEqualTo(JobState.CANCELLED);
         verify(mockRepo).save(job);
+    }
+
+    @Test
+    void finishCancelled_incrementsCancelledMetricOnlyOnce() throws Exception {
+        FilesystemJobRepository realRepo = new FilesystemJobRepository(tempWorkspace.toString());
+        MetricsService metrics = new MetricsService();
+        Job job = new Job("cancel-metric-job");
+        job.transitionTo(JobState.RUNNING);
+        realRepo.save(job);
+
+        JobServiceImpl svc = new JobServiceImpl(
+                realRepo, mockZipExtractor, mockEngine, mockCsvService,
+                new ArtifactService(realRepo), metrics,
+                tempWorkspace, DIRECT_EXECUTOR);
+
+        Method method = JobServiceImpl.class.getDeclaredMethod("finishCancelled", String.class);
+        method.setAccessible(true);
+        method.invoke(svc, "cancel-metric-job");
+        method.invoke(svc, "cancel-metric-job");
+
+        assertThat(metrics.getCancelledJobsCount()).isEqualTo(1);
     }
 
     // -------------------------------------------------------------------------

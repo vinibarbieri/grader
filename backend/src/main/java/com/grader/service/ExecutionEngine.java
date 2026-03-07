@@ -20,6 +20,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Handles the compile → run → compare cycle for a single C source file and its test cases.
@@ -50,6 +51,8 @@ public class ExecutionEngine {
     private final long stdoutCapBytes;
     private final long stderrCapBytes;
     private final List<String> compileFlags;
+
+    private final AtomicLong cleanupFailuresCount = new AtomicLong();
 
     public ExecutionEngine(ProcessGroupLauncher launcher,
                            int timeLimitSec,
@@ -250,6 +253,26 @@ public class ExecutionEngine {
     }
 
     // -------------------------------------------------------------------------
+    // Metrics accessors
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns the total number of PGID kill sequences issued by the underlying launcher.
+     * This is a global counter across all jobs processed by this engine instance.
+     */
+    public long getKilledProcessesCount() {
+        return launcher.getKilledProcessesCount();
+    }
+
+    /**
+     * Returns the total number of cases where post-kill cleanup verification failed.
+     * A non-zero count indicates potential process leaks that warrant investigation.
+     */
+    public long getCleanupFailuresCount() {
+        return cleanupFailuresCount.get();
+    }
+
+    // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
 
@@ -285,6 +308,7 @@ public class ExecutionEngine {
         if (launch.process().isAlive()) {
             log.warn("Cleanup verification failed: main process pid={} still alive after kill",
                     launch.process().pid());
+            cleanupFailuresCount.incrementAndGet();
             return false;
         }
         long survivors = launch.process().toHandle()
@@ -294,6 +318,7 @@ public class ExecutionEngine {
         if (survivors > 0) {
             log.warn("Cleanup verification failed: {} survivor(s) remain for pgid={}",
                     survivors, launch.pgid());
+            cleanupFailuresCount.incrementAndGet();
             return false;
         }
         return true;

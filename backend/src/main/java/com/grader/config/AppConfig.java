@@ -4,10 +4,7 @@ import com.grader.infrastructure.FilesystemJobRepository;
 import com.grader.infrastructure.JobRepository;
 import com.grader.infrastructure.ProcessGroupLauncher;
 import com.grader.infrastructure.SafeZipExtractor;
-import com.grader.service.CsvAggregationService;
-import com.grader.service.ExecutionEngine;
-import com.grader.service.JobService;
-import com.grader.service.JobServiceImpl;
+import com.grader.service.*;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -43,6 +40,16 @@ public class AppConfig {
         return new CsvAggregationService(config.getScoring().getMaxScorePerProblem());
     }
 
+    @Bean
+    public ArtifactService artifactService(JobRepository jobRepository) {
+        return new ArtifactService(jobRepository);
+    }
+
+    @Bean
+    public MetricsService metricsService() {
+        return new MetricsService();
+    }
+
     @Bean(destroyMethod = "shutdown")
     public ExecutorService evaluationExecutor(GraderConfig config) {
         return Executors.newFixedThreadPool(config.getWorkerPoolSize());
@@ -53,6 +60,8 @@ public class AppConfig {
                                  SafeZipExtractor zipExtractor,
                                  ExecutionEngine executionEngine,
                                  CsvAggregationService csvAggregationService,
+                                 ArtifactService artifactService,
+                                 MetricsService metricsService,
                                  GraderConfig config,
                                  ExecutorService evaluationExecutor) {
         return new JobServiceImpl(
@@ -60,6 +69,8 @@ public class AppConfig {
                 zipExtractor,
                 executionEngine,
                 csvAggregationService,
+                artifactService,
+                metricsService,
                 Path.of(config.getWorkspaceRoot()),
                 evaluationExecutor);
     }
