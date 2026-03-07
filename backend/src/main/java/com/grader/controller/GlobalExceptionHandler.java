@@ -2,6 +2,7 @@ package com.grader.controller;
 
 import com.grader.controller.dto.ErrorResponse;
 import com.grader.service.JobNotFoundException;
+import com.grader.service.JobServiceImpl.ArtifactNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -25,6 +26,19 @@ public class GlobalExceptionHandler {
                 ex.getMessage(),
                 null,
                 ex.getJobId(),
+                Instant.now().toString()
+        );
+    }
+
+    @ExceptionHandler(ArtifactNotFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ErrorResponse handleArtifactNotFound(ArtifactNotFoundException ex) {
+        log.warn("Artifact not found: {}", ex.getMessage());
+        return new ErrorResponse(
+                "ARTIFACT_NOT_FOUND",
+                ex.getMessage(),
+                null,
+                null,
                 Instant.now().toString()
         );
     }
