@@ -19,11 +19,14 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
 
+import java.lang.reflect.Method;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Executor;
 
@@ -160,6 +163,29 @@ class JobServiceImplTest {
 
         assertThatThrownBy(() -> service.evaluateJob(job.getJobId()))
                 .isInstanceOf(JobInvalidStateException.class);
+    }
+
+    @Test
+    void evaluateJob_throwsJobBusyException_whenAnotherJobIsActive() {
+        Job firstJob = Job.create();
+        Job secondJob = Job.create();
+        Map<String, Job> jobsById = new HashMap<>();
+        jobsById.put(firstJob.getJobId(), firstJob);
+        jobsById.put(secondJob.getJobId(), secondJob);
+
+        when(mockRepo.findById(anyString())).thenAnswer(invocation ->
+                Optional.ofNullable(jobsById.get(invocation.<String>getArgument(0))));
+
+        // Keep first job as RUNNING without executing evaluation thread.
+        Executor noOp = task -> { /* don't run */ };
+        JobServiceImpl svc = new JobServiceImpl(
+                mockRepo, mockZipExtractor, mockEngine, mockCsvService,
+                tempWorkspace, noOp);
+
+        svc.evaluateJob(firstJob.getJobId());
+
+        assertThatThrownBy(() -> svc.evaluateJob(secondJob.getJobId()))
+                .isInstanceOf(JobBusyException.class);
     }
 
     // -------------------------------------------------------------------------
@@ -389,7 +415,7 @@ class JobServiceImplTest {
     }
 
     @Test
-    void evaluate_transitionsToError_whenSubmissionsDirIsMissing() throws Exception {
+    void evaluate_transitionsToDone_whenSubmissionsDirIsMissing() throws Exception {
         // Job dir exists but no submissions/ subdir
         Path jobDir = tempWorkspace.resolve("no-subs-job");
         Files.createDirectories(jobDir);
@@ -492,6 +518,21 @@ class JobServiceImplTest {
         assertThat(csvContent).contains("COMPILE_ERROR");
         // Run should never be called for a compile-failed file
         verify(mockEngine, never()).runCase(anyString(), any(), any(), anyString(), any());
+    }
+
+    @Test
+    void tryTransitionToError_transitionsCancellingJobToCancelled() throws Exception {
+        Job job = Job.create();
+        job.transitionTo(JobState.RUNNING);
+        job.transitionTo(JobState.CANCELLING);
+        when(mockRepo.findById(job.getJobId())).thenReturn(Optional.of(job));
+
+        Method method = JobServiceImpl.class.getDeclaredMethod("tryTransitionToError", String.class);
+        method.setAccessible(true);
+        method.invoke(service, job.getJobId());
+
+        assertThat(job.getState()).isEqualTo(JobState.CANCELLED);
+        verify(mockRepo).save(job);
     }
 
     // -------------------------------------------------------------------------

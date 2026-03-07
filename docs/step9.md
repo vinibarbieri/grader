@@ -77,6 +77,19 @@ A new nested exception class `JobServiceImpl.ArtifactNotFoundException` (extends
 `grader.worker-pool-size`). `JobService` accepts `Executor` (the supertype) so tests can
 inject `Runnable::run` for synchronous deterministic execution.
 
+### One active grading job at a time
+
+Although the executor is a pool, `JobServiceImpl` now enforces a single active evaluation
+globally with an internal atomic lock (`activeJobId`). If a second queued job tries to start
+while another job is active, the service throws `JobBusyException` (mapped to HTTP 409),
+keeping behavior aligned with the MVP requirement "one active grading job at a time".
+
+### Error handling while cancelling
+
+If an unexpected exception happens during evaluation while the job is already in
+`CANCELLING`, the service now finalizes to `CANCELLED` instead of attempting an invalid
+`CANCELLING -> ERROR` transition. This prevents jobs from being stuck in non-terminal state.
+
 ---
 
 ## Files modified
@@ -91,7 +104,8 @@ inject `Runnable::run` for synchronous deterministic execution.
 
 | File | Purpose |
 |---|---|
-| `test/.../service/JobServiceImplTest.java` | 23 tests: unit (mocked) + integration (real filesystem) |
+| `test/.../service/JobServiceImplTest.java` | 25 tests: unit (mocked) + integration (real filesystem) |
+| `service/JobBusyException.java` | Signals that another job is already active (single-job gate) |
 
 ---
 
@@ -106,7 +120,7 @@ The 24 skipped tests are pre-existing platform-dependent integration tests for
 `ProcessGroupLauncher` and `ExecutionEngine` (require a Unix process group environment;
 skipped on macOS CI paths).
 
-### New tests in `JobServiceImplTest` (23 tests)
+### New tests in `JobServiceImplTest` (25 tests)
 
 | Test | What it verifies |
 |---|---|
@@ -129,7 +143,9 @@ skipped on macOS CI paths).
 | `cancelJob_isIdempotent_whenJobIsCancelling` | No change, no save |
 | `cancelJob_throwsJobNotFoundException_whenJobMissing` | 404 path |
 | `evaluate_fullFlow_writesCSVAndResultsJson_andTransitionsToDone` | **Integration**: real filesystem, mocked engine → DONE, CSV + results.json generated |
-| `evaluate_transitionsToError_whenSubmissionsDirIsMissing` | No submissions/ → DONE, 0 students |
+| `evaluate_transitionsToDone_whenSubmissionsDirIsMissing` | No submissions/ → DONE, 0 students |
 | `evaluate_queued_cancel_preventsEvaluation` | Cancel before evaluate → throws on evaluate |
 | `evaluate_skipsUnknownProblemFile_writesSkipRow` | SKIP row for undetected problem |
 | `evaluate_writesCompileErrorRow_whenCompileFails` | COMPILE_ERROR row, run never called |
+| `evaluateJob_throwsJobBusyException_whenAnotherJobIsActive` | Enforces single active evaluation globally |
+| `tryTransitionToError_transitionsCancellingJobToCancelled` | Prevents invalid CANCELLING → ERROR path |

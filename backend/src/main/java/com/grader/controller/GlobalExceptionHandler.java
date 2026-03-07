@@ -1,6 +1,8 @@
 package com.grader.controller;
 
 import com.grader.controller.dto.ErrorResponse;
+import com.grader.service.JobBusyException;
+import com.grader.service.JobInvalidStateException;
 import com.grader.service.JobNotFoundException;
 import com.grader.service.JobServiceImpl.ArtifactNotFoundException;
 import org.slf4j.Logger;
@@ -26,6 +28,30 @@ public class GlobalExceptionHandler {
                 ex.getMessage(),
                 null,
                 ex.getJobId(),
+                Instant.now().toString()
+        );
+    }
+
+    @ExceptionHandler(JobInvalidStateException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ErrorResponse handleJobInvalidState(JobInvalidStateException ex) {
+        return new ErrorResponse(
+                "JOB_INVALID_STATE",
+                ex.getMessage(),
+                null,
+                ex.getJobId(),
+                Instant.now().toString()
+        );
+    }
+
+    @ExceptionHandler(JobBusyException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ErrorResponse handleJobBusy(JobBusyException ex) {
+        return new ErrorResponse(
+                "JOB_BUSY",
+                ex.getMessage(),
+                "activeJobId=" + ex.getActiveJobId(),
+                ex.getRequestedJobId(),
                 Instant.now().toString()
         );
     }

@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -96,6 +97,7 @@ public class JobServiceImpl implements JobService {
      * thread between students and test cases. Removed when the evaluation task finishes.
      */
     private final ConcurrentHashMap<String, AtomicBoolean> cancelFlags = new ConcurrentHashMap<>();
+    private final AtomicReference<String> activeJobId = new AtomicReference<>(null);
 
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
@@ -160,6 +162,14 @@ public class JobServiceImpl implements JobService {
             throw new JobInvalidStateException(jobId, job.getState().name(), "QUEUED");
         }
 
+        String currentActiveJobId = activeJobId.get();
+        if (currentActiveJobId != null && !currentActiveJobId.equals(jobId)) {
+            throw new JobBusyException(jobId, currentActiveJobId);
+        }
+        if (!activeJobId.compareAndSet(null, jobId) && !jobId.equals(activeJobId.get())) {
+            throw new JobBusyException(jobId, activeJobId.get());
+        }
+
         job.transitionTo(JobState.RUNNING);
         jobRepository.save(job);
         log.info("jobId={} evaluation submitted, state=running", jobId);
@@ -167,7 +177,13 @@ public class JobServiceImpl implements JobService {
         AtomicBoolean cancelFlag = new AtomicBoolean(false);
         cancelFlags.put(jobId, cancelFlag);
 
-        workerPool.execute(() -> runEvaluation(jobId, cancelFlag));
+        try {
+            workerPool.execute(() -> runEvaluation(jobId, cancelFlag));
+        } catch (RuntimeException ex) {
+            cancelFlags.remove(jobId);
+            activeJobId.compareAndSet(jobId, null);
+            throw ex;
+        }
 
         return job;
     }
@@ -297,9 +313,14 @@ public class JobServiceImpl implements JobService {
 
         } catch (Exception e) {
             log.error("jobId={} evaluation failed: {}", jobId, e.getMessage(), e);
-            tryTransitionToError(jobId);
+            if (cancelFlag.get()) {
+                finishCancelled(jobId);
+            } else {
+                tryTransitionToError(jobId);
+            }
         } finally {
             cancelFlags.remove(jobId);
+            activeJobId.compareAndSet(jobId, null);
         }
     }
 
@@ -419,9 +440,13 @@ public class JobServiceImpl implements JobService {
         try {
             Job job = jobRepository.findById(jobId).orElse(null);
             if (job != null && !job.getState().isTerminal()) {
-                job.transitionTo(JobState.ERROR);
+                if (job.getState() == JobState.CANCELLING) {
+                    job.transitionTo(JobState.CANCELLED);
+                } else {
+                    job.transitionTo(JobState.ERROR);
+                }
                 jobRepository.save(job);
-                log.info("jobId={} transitioned to ERROR", jobId);
+                log.info("jobId={} transitioned to state={}", jobId, job.getState());
             }
         } catch (Exception ex) {
             log.error("jobId={} failed to transition to ERROR: {}", jobId, ex.getMessage());
