@@ -22,16 +22,16 @@ import java.util.Enumeration;
  * <p>Validation rules applied to every ZIP entry:
  * <ol>
  *   <li>Entry name must not start with '/' or '\' (absolute path).</li>
- *   <li>Entry name must not contain '..' (path traversal).</li>
+ *   <li>Entry path must not contain a standalone '..' segment (path traversal).</li>
  *   <li>Unix file type (from external attributes) must be a regular file or
  *       directory; symlink/hardlink and other types (block device, etc.) are rejected.</li>
  *   <li>Resolved canonical path must remain inside the target directory
  *       and must not traverse symbolic links inside target (defense-in-depth).</li>
  * </ol>
  *
- * <p>Note: the '..' check intentionally rejects any name that contains the
- * substring '..', including filenames like 'file..name'. This is an acceptable
- * trade-off for the security-sensitive grading context.
+ * <p>Note: filenames such as {@code problem1..c} are accepted because they do
+ * not contain a standalone {@code ..} path segment and therefore are not path
+ * traversal attempts.
  */
 @Component
 public class SafeZipExtractor {
@@ -76,10 +76,10 @@ public class SafeZipExtractor {
                 "Rejected absolute path entry: '" + name + "'");
         }
 
-        // Rule 2 — reject path traversal (any occurrence of '..')
-        if (name.contains("..")) {
+        // Rule 2 — reject path traversal ('..' as a standalone path segment)
+        if (containsDotDotPathSegment(name)) {
             throw new ZipSecurityException(
-                "Rejected path traversal entry (contains '..'): '" + name + "'");
+                "Rejected path traversal entry (contains '..' segment): '" + name + "'");
         }
 
         // Rule 3 — validate Unix file type from external attributes
@@ -147,6 +147,17 @@ public class SafeZipExtractor {
                     "Rejected entry traversing symbolic link within target directory: '" + entryName + "'");
             }
         }
+    }
+
+    private boolean containsDotDotPathSegment(String entryName) {
+        String normalized = entryName.replace('\\', '/');
+        String[] segments = normalized.split("/");
+        for (String segment : segments) {
+            if ("..".equals(segment)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void createDirectoriesSafely(Path dir, Path canonicalTarget, String entryName)

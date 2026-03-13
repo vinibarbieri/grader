@@ -16,6 +16,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.*;
 import java.nio.file.*;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -85,6 +86,7 @@ public class JobServiceImpl implements JobService {
             Pattern.compile("problem2|coding_2|quiz1problem2|onlinequiz2\\.c");
     private static final Pattern DIGIT1_STANDALONE = Pattern.compile("(^|[^0-9])1([^0-9]|$)");
     private static final Pattern DIGIT2_STANDALONE = Pattern.compile("(^|[^0-9])2([^0-9]|$)");
+    private static final Pattern SUBMISSION_DIR_PATTERN = Pattern.compile("^submission_\\d+$");
 
     private final JobRepository jobRepository;
     private final SafeZipExtractor zipExtractor;
@@ -141,11 +143,14 @@ public class JobServiceImpl implements JobService {
 
             // Extract ZIP contents (submissions/ + tests/) into the job directory
             zipExtractor.extract(zipPath, jobDir);
+            normalizeExtractedLayout(jobDir);
 
             jobRepository.save(job);
             log.info("jobId={} created, uploadedFile={}", job.getJobId(), file.getOriginalFilename());
             return job;
 
+        } catch (SafeZipExtractor.ZipSecurityException e) {
+            throw new IllegalArgumentException("Invalid ZIP structure: " + e.getMessage(), e);
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to create job " + job.getJobId(), e);
         }
@@ -608,5 +613,79 @@ public class JobServiceImpl implements JobService {
 
     private static String stripSuffix(String s, String suffix) {
         return s.endsWith(suffix) ? s.substring(0, s.length() - suffix.length()) : s;
+    }
+
+    /**
+     * Supports common Gradescope export layouts:
+     * - canonical: submissions/ + tests/ at ZIP root
+     * - wrapper dir: assignment_xxx/submissions or assignment_xxx/submission_*
+     * - flat export: submission_* directories at root
+     *
+     * Internal evaluation always expects jobDir/submissions and jobDir/tests.
+     */
+    private void normalizeExtractedLayout(Path jobDir) throws IOException {
+        Path root = jobDir.toRealPath();
+        Path contentRoot = detectContentRoot(root);
+
+        Path rootSubmissions = root.resolve("submissions");
+        if (!Files.isDirectory(rootSubmissions) && Files.isDirectory(contentRoot.resolve("submissions"))) {
+            Files.move(contentRoot.resolve("submissions"), rootSubmissions);
+        }
+
+        moveSubmissionDirsToCanonical(root, contentRoot);
+
+        Path rootTests = root.resolve("tests");
+        if (!Files.isDirectory(rootTests) && Files.isDirectory(contentRoot.resolve("tests"))) {
+            Files.move(contentRoot.resolve("tests"), rootTests);
+        }
+    }
+
+    private Path detectContentRoot(Path root) throws IOException {
+        if (hasSubmissionDirs(root) || Files.isDirectory(root.resolve("submissions"))) {
+            return root;
+        }
+
+        List<Path> childDirs;
+        try (Stream<Path> children = Files.list(root)) {
+            childDirs = children.filter(Files::isDirectory).collect(Collectors.toList());
+        }
+
+        for (Path child : childDirs) {
+            if (hasSubmissionDirs(child) || Files.isDirectory(child.resolve("submissions"))) {
+                return child;
+            }
+        }
+        return root;
+    }
+
+    private void moveSubmissionDirsToCanonical(Path root, Path contentRoot) throws IOException {
+        Path canonicalSubmissions = root.resolve("submissions");
+        Files.createDirectories(canonicalSubmissions);
+
+        for (Path submissionDir : listSubmissionDirs(contentRoot)) {
+            Path destination = canonicalSubmissions.resolve(submissionDir.getFileName().toString());
+            if (!Files.exists(destination)) {
+                Files.move(submissionDir, destination);
+            }
+        }
+    }
+
+    private boolean hasSubmissionDirs(Path parent) throws IOException {
+        return !listSubmissionDirs(parent).isEmpty();
+    }
+
+    private List<Path> listSubmissionDirs(Path parent) throws IOException {
+        if (!Files.isDirectory(parent)) {
+            return List.of();
+        }
+        List<Path> result = new ArrayList<>();
+        try (Stream<Path> children = Files.list(parent)) {
+            children
+                    .filter(Files::isDirectory)
+                    .filter(path -> SUBMISSION_DIR_PATTERN.matcher(path.getFileName().toString()).matches())
+                    .forEach(result::add);
+        }
+        result.sort(Comparator.comparing(path -> path.getFileName().toString()));
+        return result;
     }
 }

@@ -66,6 +66,20 @@ class SafeZipExtractorTest {
         assertDoesNotThrow(() -> new SafeZipExtractor().extract(zipFile, jobDir));
     }
 
+    @Test
+    void filenameContainingDoubleDotButNoTraversal_extractsNormally() throws Exception {
+        Path jobDir = tempDir.resolve("job-double-dot-filename");
+        Files.createDirectories(jobDir);
+
+        byte[] zip = buildZip(
+            regularFile("submissions/alice/problem1..c", "int main(){return 0;}")
+        );
+        Path zipFile = writeZip("double-dot-filename.zip", zip);
+
+        assertDoesNotThrow(() -> new SafeZipExtractor().extract(zipFile, jobDir));
+        assertTrue(Files.exists(jobDir.resolve("submissions/alice/problem1..c")));
+    }
+
     // -----------------------------------------------------------------------
     // Security-rejection tests
     // -----------------------------------------------------------------------

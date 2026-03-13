@@ -114,6 +114,87 @@ class JobServiceImplTest {
                 .isInstanceOf(RuntimeException.class);
     }
 
+    @Test
+    void createJob_throwsIllegalArgumentException_whenZipViolatesSecurityRules() throws IOException {
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "test.zip", "application/zip", "zip-content".getBytes());
+
+        when(mockRepo.getJobDirectory(anyString())).thenAnswer(inv -> {
+            Path dir = tempWorkspace.resolve(inv.<String>getArgument(0));
+            Files.createDirectories(dir);
+            return dir;
+        });
+        doThrow(new SafeZipExtractor.ZipSecurityException("contains '..' segment"))
+                .when(mockZipExtractor).extract(any(), any());
+
+        assertThatThrownBy(() -> service.createJob(file))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Invalid ZIP structure");
+    }
+
+    @Test
+    void createJob_normalizesWrapperExport_withSubmissionDirsAtWrapperRoot() throws IOException {
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "test.zip", "application/zip", "zip-content".getBytes());
+
+        Path[] capturedJobDir = new Path[1];
+        when(mockRepo.getJobDirectory(anyString())).thenAnswer(inv -> {
+            Path dir = tempWorkspace.resolve(inv.<String>getArgument(0));
+            Files.createDirectories(dir);
+            capturedJobDir[0] = dir;
+            return dir;
+        });
+
+        doAnswer(invocation -> {
+            Path jobDir = invocation.getArgument(1, Path.class);
+            Path wrapper = jobDir.resolve("assignment_7741982_export");
+            Path submissionDir = wrapper.resolve("submission_393217698");
+            Files.createDirectories(submissionDir);
+            Files.writeString(submissionDir.resolve("problem1..c"), "int main(){return 0;}");
+            return null;
+        }).when(mockZipExtractor).extract(any(), any());
+
+        service.createJob(file);
+
+        Path normalized = capturedJobDir[0]
+                .resolve("submissions")
+                .resolve("submission_393217698")
+                .resolve("problem1..c");
+        assertThat(Files.exists(normalized)).isTrue();
+    }
+
+    @Test
+    void createJob_normalizesWrapperExport_evenWithExtraDirectoriesAtRoot() throws IOException {
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "test.zip", "application/zip", "zip-content".getBytes());
+
+        Path[] capturedJobDir = new Path[1];
+        when(mockRepo.getJobDirectory(anyString())).thenAnswer(inv -> {
+            Path dir = tempWorkspace.resolve(inv.<String>getArgument(0));
+            Files.createDirectories(dir);
+            capturedJobDir[0] = dir;
+            return dir;
+        });
+
+        doAnswer(invocation -> {
+            Path jobDir = invocation.getArgument(1, Path.class);
+            Path wrapper = jobDir.resolve("assignment_7741982_export");
+            Path submissionDir = wrapper.resolve("submission_393217698");
+            Files.createDirectories(submissionDir);
+            Files.writeString(submissionDir.resolve("problem1.c"), "int main(){return 0;}");
+            Files.createDirectories(jobDir.resolve("__MACOSX"));
+            return null;
+        }).when(mockZipExtractor).extract(any(), any());
+
+        service.createJob(file);
+
+        Path normalized = capturedJobDir[0]
+                .resolve("submissions")
+                .resolve("submission_393217698")
+                .resolve("problem1.c");
+        assertThat(Files.exists(normalized)).isTrue();
+    }
+
     // -------------------------------------------------------------------------
     // evaluateJob
     // -------------------------------------------------------------------------
