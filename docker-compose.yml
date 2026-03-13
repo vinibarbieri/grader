@@ -12,6 +12,8 @@ services:
     stdin_open: true
     tty: true
     command: sleep infinity
+    ports:
+      - 8080:8080
 
 volumes:
   maven-cache:
